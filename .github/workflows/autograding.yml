@@ -237,6 +237,82 @@ jobs:
                       print('⚠️ ALERTA CRÍTICA DE PLAGIO: La estructura del HTML es 100% idéntica a una entrega previa.')
                       report.append('  ❌ [PLAGIO DETECTADO] Estructura HTML idéntica a la entrega previa del usuario: ' + autor_original)
                       score = 0  # Anular calificación por copia
+                      # ==========================================
+          # VERIFICACIÓN ANTI-PLAGIO VÍA SUPABASE
+          # ==========================================
+          supabase_url = os.environ.get('SUPABASE_URL')
+          supabase_key = os.environ.get('SUPABASE_KEY')
+          student_actor = os.environ.get('GITHUB_ACTOR', 'desconocido')
+
+          if supabase_url and supabase_key:
+              print('\n🛡️ Ejecutando análisis anti-plagio en tiempo real...')
+              
+              tags_sequence = '-'.join([tag.name for tag in soup.find_all(True)])
+              html_hash = hashlib.sha256(tags_sequence.encode('utf-8')).hexdigest()
+
+              try:
+                  req_get = urllib.request.Request(
+                      f'{supabase_url}/rest/v1/entregas_html?hash_estructura=eq.{html_hash}',
+                      headers={
+                          'apikey': supabase_key,
+                          'Authorization': f'Bearer {supabase_key}'
+                      }
+                  )
+                  with urllib.request.urlopen(req_get) as response:
+                      matches = json.loads(response.read().decode('utf-8'))
+
+                  es_copia = any(m.get('estudiante') != student_actor for m in matches)
+
+                  if es_copia:
+                      autor_original = next(m.get('estudiante') for m in matches if m.get('estudiante') != student_actor)
+                      print('⚠️ ALERTA CRÍTICA DE PLAGIO: Estructura idéntica a una entrega previa.')
+                      
+                      # 📌 REGISTRO AUTOMÁTICO EN LA TABLA DE ALERTAS
+                      try:
+                          data_plagio = json.dumps({
+                              'estudiante_infractor': student_actor,
+                              'estudiante_original': autor_original,
+                              'hash_estructura': html_hash
+                          }).encode('utf-8')
+                          
+                          req_log = urllib.request.Request(
+                              f'{supabase_url}/rest/v1/alertas_plagio',
+                              data=data_plagio,
+                              headers={
+                                  'apikey': supabase_key,
+                                  'Authorization': f'Bearer {supabase_key}',
+                                  'Content-Type': 'application/json',
+                                  'Prefer': 'return=minimal'
+                              },
+                              method='POST'
+                          )
+                          with urllib.request.urlopen(req_log) as _:
+                              pass
+                          print('🚨 Incidencia registrada en la base de datos de auditoría.')
+                      except Exception as e_log:
+                          print('Error al registrar alerta en BD:', e_log)
+
+                      report.append('  ❌ [PLAGIO DETECTADO] Estructura HTML idéntica a la entrega previa de: ' + autor_original)
+                      score = 0  # Anula la nota
+                  else:
+                      # Registrar entrega válida en entregas_html
+                      post_data = json.dumps({'estudiante': student_actor, 'hash_estructura': html_hash}).encode('utf-8')
+                      req_post = urllib.request.Request(
+                          f'{supabase_url}/rest/v1/entregas_html',
+                          data=post_data,
+                          headers={
+                              'apikey': supabase_key,
+                              'Authorization': f'Bearer {supabase_key}',
+                              'Content-Type': 'application/json',
+                              'Prefer': 'return=minimal'
+                          },
+                          method='POST'
+                      )
+                      with urllib.request.urlopen(req_post) as resp:
+                          pass
+                      print('✅ Estructura validada y registrada correctamente.')
+              except Exception as e:
+                  print('⚠️ No se pudo conectar con el servidor anti-plagio:', e)
                   else:
                       # 4. Registrar la entrega actual en Supabase
                       post_data = json.dumps({'estudiante': student_actor, 'hash_estructura': html_hash}).encode('utf-8')
