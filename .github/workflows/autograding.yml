@@ -25,6 +25,12 @@ jobs:
           import os, sys, copy, hashlib, json, urllib.request
           from bs4 import BeautifulSoup
 
+          # =========================================================================
+          # CONFIGURACIÓN DIRECTA DE SUPABASE (SIN DEPENDER DE SECRETS EN GITHUB)
+          # =========================================================================
+          SUPABASE_URL = "https://ikusdplwwvcbxgvevkvw.supabase.co"
+          SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlrdXNkcGx3d3ZjYnhndmV2a3Z3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg5ODgyMjYsImV4cCI6MjEwNDU2NDIyNn0.TEA3ZOmZxv7zedc2hDZUaDoB0oGDVMXM2yh1M6D4YBc"
+
           print("🔍 Iniciando evaluacion de index.html...\n")
 
           if not os.path.exists("index.html"):
@@ -202,80 +208,78 @@ jobs:
           # ==========================================
           # VERIFICACIÓN ANTI-PLAGIO VÍA SUPABASE
           # ==========================================
-          supabase_url = os.environ.get("SUPABASE_URL")
-          supabase_key = os.environ.get("SUPABASE_KEY")
           student_actor = os.environ.get("GITHUB_ACTOR", "desconocido")
 
-          if supabase_url and supabase_key:
-              print("\n🛡️ Ejecutando análisis anti-plagio en tiempo real...")
-              
-              tags_sequence = "-".join([tag.name for tag in soup.find_all(True)])
-              html_hash = hashlib.sha256(tags_sequence.encode("utf-8")).hexdigest()
+          print("\n🛡️ Conectando con Supabase para validación anti-plagio...")
+          tags_sequence = "-".join([tag.name for tag in soup.find_all(True)])
+          html_hash = hashlib.sha256(tags_sequence.encode("utf-8")).hexdigest()
 
-              try:
-                  # 1. Consultar si la estructura existe
-                  req_get = urllib.request.Request(
-                      f"{supabase_url}/rest/v1/entregas_html?hash_estructura=eq.{html_hash}",
-                      headers={
-                          "apikey": supabase_key,
-                          "Authorization": f"Bearer {supabase_key}"
-                      }
-                  )
-                  with urllib.request.urlopen(req_get) as response:
-                      matches = json.loads(response.read().decode("utf-8"))
+          try:
+              # 1. Consultar entregas previas
+              url_get = f"{SUPABASE_URL}/rest/v1/entregas_html?hash_estructura=eq.{html_hash}"
+              req_get = urllib.request.Request(
+                  url_get,
+                  headers={
+                      "apikey": SUPABASE_KEY,
+                      "Authorization": f"Bearer {SUPABASE_KEY}"
+                  }
+              )
+              with urllib.request.urlopen(req_get) as response:
+                  matches = json.loads(response.read().decode("utf-8"))
 
-                  es_copia = any(m.get("estudiante") != student_actor for m in matches)
+              es_copia = any(m.get("estudiante") != student_actor for m in matches)
 
-                  if es_copia:
-                      autor_original = next(m.get("estudiante") for m in matches if m.get("estudiante") != student_actor)
-                      print(f"⚠️ ALERTA CRÍTICA DE PLAGIO: Estructura idéntica a la entrega de {autor_original}.")
+              if es_copia:
+                  autor_original = next(m.get("estudiante") for m in matches if m.get("estudiante") != student_actor)
+                  print(f"🚨 ALERTA DE PLAGIO DETECTADA: Estructura HTML idéntica a la de '{autor_original}'.")
 
-                      # 2. Registrar la incidencia en la tabla alertas_plagio
-                      try:
-                          data_plagio = json.dumps({
-                              "estudiante_infractor": student_actor,
-                              "estudiante_original": autor_original,
-                              "hash_estructura": html_hash
-                          }).encode("utf-8")
+                  # 2. Guardar log de infracción en la BD
+                  try:
+                      data_plagio = json.dumps({
+                          "estudiante_infractor": student_actor,
+                          "estudiante_original": autor_original,
+                          "hash_estructura": html_hash
+                      }).encode("utf-8")
 
-                          req_log = urllib.request.Request(
-                              f"{supabase_url}/rest/v1/alertas_plagio",
-                              data=data_plagio,
-                              headers={
-                                  "apikey": supabase_key,
-                                  "Authorization": f"Bearer {supabase_key}",
-                                  "Content-Type": "application/json",
-                                  "Prefer": "return=minimal"
-                              },
-                              method="POST"
-                          )
-                          with urllib.request.urlopen(req_log) as _:
-                              pass
-                          print("🚨 Incidencia registrada en la base de datos de auditoría (alertas_plagio).")
-                      except Exception as e_log:
-                          print("Error al registrar alerta en BD:", e_log)
-
-                      report.append(f"  ❌ [PLAGIO DETECTADO] Estructura HTML idéntica a la entrega previa de: {autor_original}")
-                      score = 0  # Anular calificación
-                  else:
-                      # 3. Registrar la entrega válida en entregas_html
-                      post_data = json.dumps({"estudiante": student_actor, "hash_estructura": html_hash}).encode("utf-8")
-                      req_post = urllib.request.Request(
-                          f"{supabase_url}/rest/v1/entregas_html",
-                          data=post_data,
+                      req_log = urllib.request.Request(
+                          f"{SUPABASE_URL}/rest/v1/alertas_plagio",
+                          data=data_plagio,
                           headers={
-                              "apikey": supabase_key,
-                              "Authorization": f"Bearer {supabase_key}",
+                              "apikey": SUPABASE_KEY,
+                              "Authorization": f"Bearer {SUPABASE_KEY}",
                               "Content-Type": "application/json",
                               "Prefer": "return=minimal"
                           },
                           method="POST"
                       )
-                      with urllib.request.urlopen(req_post) as _:
+                      with urllib.request.urlopen(req_log) as _:
                           pass
-                      print("✅ Estructura validada y registrada correctamente.")
-              except Exception as e:
-                  print("⚠️ No se pudo conectar con el servidor anti-plagio:", e)
+                      print("📌 Incidencia registrada en la tabla 'alertas_plagio' de Supabase.")
+                  except Exception as err_log:
+                      print("❌ Error al guardar log en alertas_plagio:", err_log)
+
+                  report.append(f"  ❌ [PLAGIO DETECTADO] Código HTML con estructura idéntica al entregado por: {autor_original}")
+                  score = 0
+              else:
+                  # 3. Registrar primera entrega válida
+                  post_data = json.dumps({"estudiante": student_actor, "hash_estructura": html_hash}).encode("utf-8")
+                  req_post = urllib.request.Request(
+                      f"{SUPABASE_URL}/rest/v1/entregas_html",
+                      data=post_data,
+                      headers={
+                          "apikey": SUPABASE_KEY,
+                          "Authorization": f"Bearer {SUPABASE_KEY}",
+                          "Content-Type": "application/json",
+                          "Prefer": "return=minimal"
+                      },
+                      method="POST"
+                  )
+                  with urllib.request.urlopen(req_post) as _:
+                      pass
+                  print(f"✅ Firma de estructura registrada exitosamente para '{student_actor}'.")
+
+          except Exception as err_sp:
+              print("❌ ERROR DE CONEXIÓN A SUPABASE:", err_sp)
 
           # ==========================================
           # RESULTADO FINAL Y DESGLOSE
@@ -300,7 +304,5 @@ jobs:
 
       - name: 5. Ejecutar Evaluacion
         env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           GITHUB_ACTOR: ${{ github.actor }}
         run: python evaluate.py
